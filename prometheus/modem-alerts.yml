@@ -1,0 +1,60 @@
+groups:
+  - name: modem-alerts
+
+    rules:
+
+      - alert: ModemScrapeFailed
+        expr: modem_scrape_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Modem exporter scrape failed"
+
+      - alert: LowDownstreamSNR
+        expr: modem_downstream_snr_db < 35
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low downstream SNR detected"
+
+      - alert: HighUpstreamPower
+        expr: modem_upstream_power_dbmv > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High upstream transmit power"
+
+      - alert: LowDownstreamPower
+        expr: modem_downstream_power_dbmv < -10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low downstream power level"
+
+      - alert: HighDownstreamPower
+        expr: modem_downstream_power_dbmv > 12
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High downstream power level"
+
+      - alert: ExcessiveUncorrectables
+        expr: rate(modem_downstream_uncorrectables_total[5m]) > 10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High DOCSIS uncorrectable error rate"
+
+      - alert: OFDMSNRLow
+        expr: modem_ofdm_downstream_snr_db < 35
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low OFDM SNR detected"
