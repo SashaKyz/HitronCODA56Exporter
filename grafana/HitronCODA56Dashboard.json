@@ -1,0 +1,162 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "title": "Scrape Success",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "modem_scrape_success"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "title": "Average Downstream Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg(modem_downstream_power_dbmv)"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 4,
+        "y": 0
+      }
+    },
+    {
+      "title": "Downstream Power Per Channel",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "modem_downstream_power_dbmv"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "title": "Downstream SNR",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "modem_downstream_snr_db"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "title": "Upstream Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "modem_upstream_power_dbmv"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "title": "OFDM Downstream Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "modem_ofdm_downstream_power_dbmv"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "title": "OFDM Downstream SNR",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "modem_ofdm_downstream_snr_db"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      }
+    },
+    {
+      "title": "Corrected Codewords Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(modem_downstream_corrected_total[5m])"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      }
+    },
+    {
+      "title": "Uncorrectables Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(modem_downstream_uncorrectables_total[5m])"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      }
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "docsis",
+    "modem",
+    "hitron"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Hitron CODA56 DOCSIS Monitoring",
+  "version": 1
+}

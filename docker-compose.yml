@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+
+  modem-exporter:
+    build: ./exporter
+    container_name: modem-exporter
+    restart: unless-stopped
+
+    network_mode: host
+
+    environment:
+      MODEM_URL: "https://192.168.100.1"
+      VERIFY_SSL: "false"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+
+    network_mode: host
+
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+    depends_on:
+      - modem-exporter
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+
+    network_mode: host
+
+    volumes:
+      - grafana-storage:/var/lib/grafana
+
+    depends_on:
+      - prometheus
+
+volumes:
+  grafana-storage:
