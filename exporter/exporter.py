@@ -1,204 +1,112 @@
-import os
 import json
-import argparse
-import traceback
-import requests
+import os
+import threading
+import time
 import urllib3
+import requests
 
 from flask import Flask, Response
-from prometheus_client import Gauge, generate_latest
-
-#
-# Disable warnings for self-signed modem certificates
-#
+from prometheus_client import Gauge, generate_latest, CONTENT_TYPE_LATEST
+from requests.adapters import HTTPAdapter
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+CONFIG = {
+    "modem_url": os.getenv("MODEM_URL", "https://192.168.100.1"),
+    "verify_ssl": os.getenv("VERIFY_SSL", "false").lower() == "true",
+    "port": int(os.getenv("PORT", "9877")),
+    "scrape_interval": int(os.getenv("SCRAPE_INTERVAL", "30"))
+}
+
 app = Flask(__name__)
 
-DEFAULT_MODEM_URL = "https://192.168.100.1"
-CONFIG_FILE = "config.json"
+#
+# Requests session
+#
+session = requests.Session()
+
+adapter = HTTPAdapter(
+    pool_connections=1,
+    pool_maxsize=1,
+    max_retries=0
+)
+
+session.mount("https://", adapter)
+
+session.headers.update({
+    "Connection": "close",
+    "User-Agent": "Mozilla/5.0"
+})
 
 #
-# Configuration loader
+# Global state
 #
-
-def load_config():
-
-    config = {}
-
-    #
-    # Config file
-    #
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"Failed to load config file: {e}")
-
-    #
-    # Environment variables
-    #
-    env_url = os.getenv("MODEM_URL")
-    env_verify_ssl = os.getenv("VERIFY_SSL", "false")
-
-    #
-    # CLI args
-    #
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--modem-url",
-        help="Modem base URL"
-    )
-
-    parser.add_argument(
-        "--verify-ssl",
-        action="store_true",
-        help="Enable SSL verification"
-    )
-
-    args, _ = parser.parse_known_args()
-
-    modem_url = (
-        args.modem_url
-        or env_url
-        or config.get("modem_url")
-        or DEFAULT_MODEM_URL
-    )
-
-    verify_ssl = (
-        args.verify_ssl
-        or env_verify_ssl.lower() == "true"
-        or config.get("verify_ssl", False)
-    )
-
-    return {
-        "modem_url": modem_url.rstrip("/"),
-        "verify_ssl": verify_ssl
-    }
-
-
-CONFIG = load_config()
-
-print("======================================")
-print(f"MODEM URL : {CONFIG['modem_url']}")
-print(f"VERIFY SSL: {CONFIG['verify_ssl']}")
-print("======================================")
+last_scrape = 0
+scrape_lock = threading.Lock()
 
 #
-# Helpers
+# Metrics
 #
 
-def safe_float(value, default=0):
-
-    try:
-
-        if value is None:
-            return default
-
-        value = str(value).strip()
-
-        if value == "":
-            return default
-
-        if value in ["--", "nan", "NaN", "N/A"]:
-            return default
-
-        return float(value)
-
-    except Exception:
-        return default
-
-
-def fetch_json(endpoint):
-
-    url = f"{CONFIG['modem_url']}/data/{endpoint}"
-
-    print(f"Fetching: {url}")
-
-    r = requests.get(
-        url,
-        timeout=15,
-        verify=CONFIG["verify_ssl"],
-        allow_redirects=True
-    )
-
-    r.raise_for_status()
-
-    try:
-        return r.json()
-
-    except Exception:
-
-        print("======================================")
-        print("INVALID JSON RESPONSE")
-        print("======================================")
-        print(r.text[:2000])
-
-        raise
-
-#
-# Prometheus metrics
-#
-
-scrape_success = Gauge(
+SCRAPE_SUCCESS = Gauge(
     "modem_scrape_success",
     "Whether modem scrape succeeded"
 )
 
-#
-# Downstream SC-QAM
-#
+SCRAPE_AGE = Gauge(
+    "modem_scrape_age_seconds",
+    "Age of last successful scrape"
+)
 
-downstream_power = Gauge(
+#
+# Downstream
+#
+DOWNSTREAM_POWER = Gauge(
     "modem_downstream_power_dbmv",
     "DOCSIS downstream power",
     ["channel"]
 )
 
-downstream_snr = Gauge(
+DOWNSTREAM_SNR = Gauge(
     "modem_downstream_snr_db",
     "DOCSIS downstream SNR",
     ["channel"]
 )
 
-downstream_corrected = Gauge(
-    "modem_downstream_corrected_total",
-    "DOCSIS corrected codewords",
-    ["channel"]
-)
-
-downstream_uncorrectables = Gauge(
-    "modem_downstream_uncorrectables_total",
-    "DOCSIS uncorrectable codewords",
-    ["channel"]
-)
-
-downstream_frequency = Gauge(
+DOWNSTREAM_FREQ = Gauge(
     "modem_downstream_frequency_hz",
     "DOCSIS downstream frequency",
     ["channel"]
 )
 
-#
-# Upstream SC-QAM
-#
+DOWNSTREAM_CORRECTED = Gauge(
+    "modem_downstream_corrected_total",
+    "DOCSIS corrected codewords",
+    ["channel"]
+)
 
-upstream_power = Gauge(
+DOWNSTREAM_UNCORRECTABLE = Gauge(
+    "modem_downstream_uncorrectables_total",
+    "DOCSIS uncorrectable codewords",
+    ["channel"]
+)
+
+#
+# Upstream
+#
+UPSTREAM_POWER = Gauge(
     "modem_upstream_power_dbmv",
     "DOCSIS upstream transmit power",
     ["channel"]
 )
 
-upstream_frequency = Gauge(
+UPSTREAM_FREQ = Gauge(
     "modem_upstream_frequency_hz",
     "DOCSIS upstream frequency",
     ["channel"]
 )
 
-upstream_bandwidth = Gauge(
+UPSTREAM_BW = Gauge(
     "modem_upstream_bandwidth_hz",
     "DOCSIS upstream bandwidth",
     ["channel"]
@@ -207,20 +115,19 @@ upstream_bandwidth = Gauge(
 #
 # OFDM Downstream
 #
-
-ofdm_downstream_power = Gauge(
+OFDM_POWER = Gauge(
     "modem_ofdm_downstream_power_dbmv",
     "DOCSIS OFDM downstream PLC power",
     ["channel"]
 )
 
-ofdm_downstream_snr = Gauge(
+OFDM_SNR = Gauge(
     "modem_ofdm_downstream_snr_db",
     "DOCSIS OFDM downstream SNR",
     ["channel"]
 )
 
-ofdm_downstream_frequency = Gauge(
+OFDM_FREQ = Gauge(
     "modem_ofdm_downstream_frequency_hz",
     "DOCSIS OFDM downstream frequency",
     ["channel"]
@@ -229,218 +136,263 @@ ofdm_downstream_frequency = Gauge(
 #
 # OFDMA Upstream
 #
-
-ofdma_upstream_power = Gauge(
+OFDMA_POWER = Gauge(
     "modem_ofdma_upstream_power_dbmv",
     "DOCSIS OFDMA upstream power",
     ["channel"]
 )
 
-ofdma_upstream_frequency = Gauge(
+OFDMA_FREQ = Gauge(
     "modem_ofdma_upstream_frequency_hz",
     "DOCSIS OFDMA upstream frequency",
     ["channel"]
 )
 
-ofdma_upstream_bandwidth = Gauge(
+OFDMA_BW = Gauge(
     "modem_ofdma_upstream_bandwidth_hz",
     "DOCSIS OFDMA upstream bandwidth",
     ["channel"]
 )
 
-#
-# Main scrape function
-#
+
+def fetch_json(endpoint):
+
+    url = f"{CONFIG['modem_url']}/data/{endpoint}"
+
+    print(f"Fetching {url}")
+
+    r = session.get(
+        url,
+        timeout=20,
+        verify=CONFIG["verify_ssl"],
+        allow_redirects=True,
+        stream=False
+    )
+
+    r.raise_for_status()
+
+    body = r.content.decode(
+        "utf-8",
+        errors="ignore"
+    )
+
+    return json.loads(body)
+
+
+def safe_float(value):
+
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return 0.0
+
 
 def scrape_modem():
 
-    try:
+    #
+    # Downstream SC-QAM
+    #
+    ds = fetch_json("dsinfo.asp")
+
+    for ch in ds:
+
+        channel = ch.get("channelId", ch.get("portId"))
+
+        DOWNSTREAM_POWER.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("signalStrength"))
+        )
+
+        DOWNSTREAM_SNR.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("snr"))
+        )
+
+        DOWNSTREAM_FREQ.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("frequency"))
+        )
+
+        DOWNSTREAM_CORRECTED.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("correcteds"))
+        )
+
+        DOWNSTREAM_UNCORRECTABLE.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("uncorrect"))
+        )
+
+    #
+    # Upstream SC-QAM
+    #
+    us = fetch_json("usinfo.asp")
+
+    for ch in us:
+
+        channel = ch.get("channelId", ch.get("portId"))
+
+        UPSTREAM_POWER.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("signalStrength"))
+        )
+
+        UPSTREAM_FREQ.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("frequency"))
+        )
+
+        UPSTREAM_BW.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("bandwidth"))
+        )
+
+    #
+    # OFDM Downstream
+    #
+    dsofdm = fetch_json("dsofdminfo.asp")
+
+    for idx, ch in enumerate(dsofdm):
+
+        channel = str(idx)
+
+        OFDM_POWER.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("plcpower"))
+        )
+
+        OFDM_SNR.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("SNR"))
+        )
+
+        OFDM_FREQ.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("Subcarr0freqFreq"))
+        )
+
+        DOWNSTREAM_CORRECTED.labels(
+            channel=f"ofdm_{channel}"
+        ).set(
+            safe_float(ch.get("correcteds"))
+        )
+
+        DOWNSTREAM_UNCORRECTABLE.labels(
+            channel=f"ofdm_{channel}"
+        ).set(
+            safe_float(ch.get("uncorrect"))
+        )
+
+    #
+    # OFDMA Upstream
+    #
+    usofdm = fetch_json("usofdminfo.asp")
+
+    for ch in usofdm:
+
+        state = str(ch.get("state", "")).strip()
+
+        if state != "OPERATE":
+            continue
+
+        channel = str(ch.get("uschindex"))
+
+        OFDMA_POWER.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("repPower1_6"))
+        )
+
+        OFDMA_FREQ.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("frequency"))
+        )
 
         #
-        # Downstream SC-QAM
+        # MHz -> Hz
         #
+        OFDMA_BW.labels(
+            channel=channel
+        ).set(
+            safe_float(ch.get("channelBw")) * 1000000
+        )
+
+    SCRAPE_SUCCESS.set(1)
+
+
+def scrape_loop():
+
+    global last_scrape
+
+    while True:
+
         try:
 
-            dsinfo = fetch_json("dsinfo.asp")
+            with scrape_lock:
 
-            for ch in dsinfo:
+                scrape_modem()
 
-                channel = str(ch.get("channelId", "0"))
+                last_scrape = time.time()
 
-                downstream_power.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("signalStrength")))
+                SCRAPE_AGE.set(0)
 
-                downstream_snr.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("snr")))
+                print("Modem scrape successful")
 
-                downstream_corrected.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("correcteds")))
+        except Exception as e:
 
-                downstream_uncorrectables.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("uncorrect")))
+            SCRAPE_SUCCESS.set(0)
 
-                downstream_frequency.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("frequency")))
+            print(f"Scrape failed: {e}")
 
-        except Exception:
-            print("Downstream scrape failed")
-            traceback.print_exc()
-
-        #
-        # Upstream SC-QAM
-        #
-        try:
-
-            usinfo = fetch_json("usinfo.asp")
-
-            for ch in usinfo:
-
-                channel = str(ch.get("channelId", "0"))
-
-                upstream_power.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("signalStrength")))
-
-                upstream_frequency.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("frequency")))
-
-                upstream_bandwidth.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("bandwidth")))
-
-        except Exception:
-            print("Upstream scrape failed")
-            traceback.print_exc()
-
-        #
-        # OFDM Downstream
-        #
-        try:
-
-            dsofdm = fetch_json("dsofdminfo.asp")
-
-            for idx, ch in enumerate(dsofdm):
-
-                channel = str(idx)
-
-                ofdm_downstream_power.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("plcpower")))
-
-                ofdm_downstream_snr.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("SNR")))
-
-                freq = ch.get("Subcarr0freqFreq")
-
-                if freq is not None:
-                    ofdm_downstream_frequency.labels(
-                        channel=channel
-                    ).set(safe_float(str(freq).strip()))
-
-                downstream_corrected.labels(
-                    channel=f"ofdm_{channel}"
-                ).set(safe_float(ch.get("correcteds")))
-
-                downstream_uncorrectables.labels(
-                    channel=f"ofdm_{channel}"
-                ).set(safe_float(ch.get("uncorrect")))
-
-        except Exception:
-            print("OFDM downstream scrape failed")
-            traceback.print_exc()
-
-        #
-        # OFDMA Upstream
-        #
-        try:
-
-            usofdm = fetch_json("usofdminfo.asp")
-
-            for ch in usofdm:
-
-                channel = str(ch.get("uschindex", "0"))
-
-                state = str(
-                    ch.get("state", "")
-                ).strip()
-
-                #
-                # Skip disabled channels
-                #
-                if state != "OPERATE":
-                    continue
-
-                ofdma_upstream_frequency.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("frequency")))
-
-                #
-                # MHz -> Hz
-                #
-                bandwidth = safe_float(
-                    ch.get("channelBw")
-                ) * 1_000_000
-
-                ofdma_upstream_bandwidth.labels(
-                    channel=channel
-                ).set(bandwidth)
-
-                #
-                # repPower1_6 is usually the realistic value
-                #
-                ofdma_upstream_power.labels(
-                    channel=channel
-                ).set(safe_float(ch.get("repPower1_6")))
-
-        except Exception:
-            print("OFDMA upstream scrape failed")
-            traceback.print_exc()
-
-        scrape_success.set(1)
-
-    except Exception:
-
-        print("======================================")
-        print("SCRAPE FAILED")
-        print("======================================")
-
-        traceback.print_exc()
-
-        scrape_success.set(0)
-
-#
-# Flask routes
-#
-
-@app.route("/")
-def home():
-    return "DOCSIS modem exporter OK"
+        time.sleep(CONFIG["scrape_interval"])
 
 
 @app.route("/metrics")
 def metrics():
 
-    scrape_modem()
+    if last_scrape > 0:
+
+        SCRAPE_AGE.set(
+            time.time() - last_scrape
+        )
 
     return Response(
         generate_latest(),
-        mimetype="text/plain"
+        mimetype=CONTENT_TYPE_LATEST
     )
 
-#
-# Main
-#
+
+@app.route("/")
+def index():
+
+    return {
+        "status": "ok",
+        "metrics": "/metrics"
+    }
+
 
 if __name__ == "__main__":
 
+    t = threading.Thread(
+        target=scrape_loop,
+        daemon=True
+    )
+
+    t.start()
+
     app.run(
         host="0.0.0.0",
-        port=9877
+        port=CONFIG["port"]
     )
